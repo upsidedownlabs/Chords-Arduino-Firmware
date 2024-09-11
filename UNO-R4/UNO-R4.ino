@@ -47,7 +47,7 @@ void timerCallback(timer_callback_args_t __attribute((unused)) *p_args) {
   //Read 6ch ADC inputs and store current values in PacketBuffer
   for(CurrentChannel=0;CurrentChannel<NUM_CHANNELS;CurrentChannel++){
     ADCValue = analogRead(CurrentChannel);
-    PacketBuffer[((2*CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	  // Write High Byte
+    PacketBuffer[((2*CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	    // Write High Byte
     PacketBuffer[((2*CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue);	// Write Low Byte
   }
 
@@ -98,22 +98,22 @@ void setup() {
   digitalWrite(LED_BUILTIN,LOW);
 
   // Initialize PacketBuffer
-  PacketBuffer[0] = SYNC_BYTE_1;    //Sync 0
-  PacketBuffer[1] = SYNC_BYTE_2;    //Sync 1
-  PacketBuffer[2] = 0;       //Packet counter
-  PacketBuffer[3] = 0x02;    //CH1 High Byte
-  PacketBuffer[4] = 0x00;    //CH1 Low Byte
-  PacketBuffer[5] = 0x02;    //CH2 High Byte
-  PacketBuffer[6] = 0x00;    //CH2 Low Byte
-  PacketBuffer[7] = 0x02;    //CH3 High Byte
-  PacketBuffer[8] = 0x00;    //CH3 Low Byte
-  PacketBuffer[9] = 0x02;   //CH4 High Byte
-  PacketBuffer[10] = 0x00;   //CH4 Low Byte
-  PacketBuffer[11] = 0x02;   //CH5 High Byte
-  PacketBuffer[12] = 0x00;   //CH5 Low Byte
-  PacketBuffer[13] = 0x02;   //CH6 High Byte
-  PacketBuffer[14] = 0x00;   //CH6 Low Byte 
-  PacketBuffer[15] =  END_BYTE;	// Switches state
+  PacketBuffer[0]   = SYNC_BYTE_1;    //Sync 0
+  PacketBuffer[1]   = SYNC_BYTE_2;    //Sync 1
+  PacketBuffer[2]   = 0;              //Packet counter
+  PacketBuffer[3]   = 0x02;           //CH1 High Byte
+  PacketBuffer[4]   = 0x00;           //CH1 Low Byte
+  PacketBuffer[5]   = 0x02;           //CH2 High Byte
+  PacketBuffer[6]   = 0x00;           //CH2 Low Byte
+  PacketBuffer[7]   = 0x02;           //CH3 High Byte
+  PacketBuffer[8]   = 0x00;           //CH3 Low Byte
+  PacketBuffer[9]   = 0x02;           //CH4 High Byte
+  PacketBuffer[10]  = 0x00;           //CH4 Low Byte
+  PacketBuffer[11]  = 0x02;           //CH5 High Byte
+  PacketBuffer[12]  = 0x00;           //CH5 Low Byte
+  PacketBuffer[13]  = 0x02;           //CH6 High Byte
+  PacketBuffer[14]  = 0x00;           //CH6 Low Byte 
+  PacketBuffer[15]  = END_BYTE;	      //End Byte
 
   timerBegin(SAMP_RATE);
 
