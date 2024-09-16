@@ -72,12 +72,12 @@ ISR(TIMER1_COMPA_vect)
 	// Read 6ch ADC inputs and store current values in PacketBuffer
 	for (CurrentChannel = 0; CurrentChannel < NUM_CHANNELS; CurrentChannel++)
 	{
-		ADCValue = analogRead(CurrentChannel);
-		delayMicroseconds(10);
-		ADCValue = analogRead(CurrentChannel);
-		delayMicroseconds(10);
-		ADCValue += analogRead(CurrentChannel);
-		ADCValue = ADCValue / 2;
+		ADCValue = analogRead(CurrentChannel);									   // Ignore first reading
+		delayMicroseconds(10);													   // Wait ADC to settle
+		ADCValue = analogRead(CurrentChannel);									   // Take new ADC reading
+		delayMicroseconds(10);													   // Wait ADC to settle
+		ADCValue += analogRead(CurrentChannel);									   // Add new ADC reading
+		ADCValue = ADCValue / 2;												   // Take ADC reading average
 		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	   // Write High Byte
 		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue); // Write Low Byte
 	}
