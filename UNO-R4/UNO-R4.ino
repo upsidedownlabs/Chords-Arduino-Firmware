@@ -12,7 +12,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-// Copyright (c) 2021 Upside Down Labs - contact@upsidedownlabs.tech
+// Copyright (c) 2024 Upside Down Labs - contact@upsidedownlabs.tech
 // Author: Deepak Khatri
 //
 // At Upside Down Labs, we create open-source DIY neuroscience hardware and software.
@@ -28,10 +28,11 @@
 #define NUM_CHANNELS 6                                    // Number of channels supported
 #define HEADER_LEN 3                                      // Header = SYNC_BYTE_1 + SYNC_BYTE_2 + Counter
 #define PACKET_LEN (NUM_CHANNELS * 2 + HEADER_LEN + 1)    // Packet length = Header + Data + END_BYTE
-#define SAMP_RATE 500                                     // Sampling rate (250/500 for UNO R4)
-#define SYNC_BYTE_1 0xC7;                                 // Packet first byte
-#define SYNC_BYTE_2 0x7C;                                 // Packet second byte
-#define END_BYTE 0x01;                                    // Packet last byte
+#define SAMP_RATE 500.0                                   // Sampling rate (250/500 for UNO R4)
+#define SYNC_BYTE_1 0xC7                                  // Packet first byte
+#define SYNC_BYTE_2 0x7C                                  // Packet second byte
+#define END_BYTE 0x01                                     // Packet last byte
+#define CAL_SIG_DIVIDER 16                                // Calibration signal divider value
 
 // Global constants and variables
 uint8_t PacketBuffer[PACKET_LEN];     // The transmission packet
@@ -47,6 +48,10 @@ void timerCallback(timer_callback_args_t __attribute((unused)) *p_args) {
   //Read 6ch ADC inputs and store current values in PacketBuffer
   for(CurrentChannel=0;CurrentChannel<NUM_CHANNELS;CurrentChannel++){
     ADCValue = analogRead(CurrentChannel);
+    delayMicroseconds(10);
+    ADCValue = analogRead(CurrentChannel);
+    ADCValue += analogRead(CurrentChannel);
+    ADCValue = ADCValue/2;
     PacketBuffer[((2*CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	    // Write High Byte
     PacketBuffer[((2*CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue);	// Write Low Byte
   }
@@ -58,7 +63,7 @@ void timerCallback(timer_callback_args_t __attribute((unused)) *p_args) {
   PacketBuffer[2]++;
 
   // Status LED / Calibration signal
-  if(PacketBuffer[2] % 16 == 0) {
+  if(PacketBuffer[2] % CAL_SIG_DIVIDER == 0) {
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
   }
 }
@@ -77,11 +82,13 @@ bool timerBegin(float sampling_rate) {
 }
 
 bool timerStart() {
+  STATUS = true;
   digitalWrite(LED_BUILTIN,LOW);
   return ChordsTimer.start();
 }
 
 bool timerStop() {
+  STATUS = false;
   digitalWrite(LED_BUILTIN,LOW);
   return ChordsTimer.stop();
 }
@@ -133,13 +140,11 @@ void loop() {
 
     // Start data acquisition
     if(command == "START"){
-      STATUS = true;
       timerStart();
     } 
 
     // Stop data acquisition
     if(command == "STOP") {
-      STATUS = false;
       timerStop();
     }
 
