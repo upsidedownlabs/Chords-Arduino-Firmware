@@ -20,141 +20,162 @@
 // By supporting us with your purchase, you help spread innovation and open science.
 // Thank you for being part of this journey with us!
 
-
 #include "FspTimer.h"
 #include <Arduino.h>
 
 // Definitions
-#define NUM_CHANNELS 6                                    // Number of channels supported
-#define HEADER_LEN 3                                      // Header = SYNC_BYTE_1 + SYNC_BYTE_2 + Counter
-#define PACKET_LEN (NUM_CHANNELS * 2 + HEADER_LEN + 1)    // Packet length = Header + Data + END_BYTE
-#define SAMP_RATE 500.0                                   // Sampling rate (250/500 for UNO R4)
-#define SYNC_BYTE_1 0xC7                                  // Packet first byte
-#define SYNC_BYTE_2 0x7C                                  // Packet second byte
-#define END_BYTE 0x01                                     // Packet last byte
-#define CAL_SIG_DIVIDER 16                                // Calibration signal divider value
+#define NUM_CHANNELS 6								   // Number of channels supported
+#define HEADER_LEN 3								   // Header = SYNC_BYTE_1 + SYNC_BYTE_2 + Counter
+#define PACKET_LEN (NUM_CHANNELS * 2 + HEADER_LEN + 1) // Packet length = Header + Data + END_BYTE
+#define SAMP_RATE 500.0								   // Sampling rate (250/500 for UNO R4)
+#define SYNC_BYTE_1 0xC7							   // Packet first byte
+#define SYNC_BYTE_2 0x7C							   // Packet second byte
+#define END_BYTE 0x01								   // Packet last byte
+#define CAL_SIG_DIVIDER 16							   // Calibration signal divider value
+#define BAUD_RATE 230400							   // Serial connection baud rate
 
 // Global constants and variables
-uint8_t PacketBuffer[PACKET_LEN];     // The transmission packet
-uint8_t CurrentChannel;                    // Current channel being sampled
-uint8_t PacketCounter = 0;	          // Counter for current packet
-uint16_t ADCValue = 0;	              // ADC current value
-bool STATUS = false;                  // STATUS bit
+uint8_t PacketBuffer[PACKET_LEN]; // The transmission packet
+uint8_t CurrentChannel;			  // Current channel being sampled
+uint8_t PacketCounter = 0;		  // Counter for current packet
+uint16_t ADCValue = 0;			  // ADC current value
+bool STATUS = false;			  // STATUS bit
 
 FspTimer ChordsTimer;
 
 // callback method used by timer
-void timerCallback(timer_callback_args_t __attribute((unused)) *p_args) {
-  //Read 6ch ADC inputs and store current values in PacketBuffer
-  for(CurrentChannel=0;CurrentChannel<NUM_CHANNELS;CurrentChannel++){
-    ADCValue = analogRead(CurrentChannel);
-    delayMicroseconds(10);
-    ADCValue = analogRead(CurrentChannel);
-    ADCValue += analogRead(CurrentChannel);
-    ADCValue = ADCValue/2;
-    PacketBuffer[((2*CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	    // Write High Byte
-    PacketBuffer[((2*CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue);	// Write Low Byte
-  }
+void timerCallback(timer_callback_args_t __attribute((unused)) * p_args)
+{
+	// Read 6ch ADC inputs and store current values in PacketBuffer
+	for (CurrentChannel = 0; CurrentChannel < NUM_CHANNELS; CurrentChannel++)
+	{
+		ADCValue = analogRead(CurrentChannel);									   // Ignore first reading
+		delayMicroseconds(10);													   // Wait ADC to settle
+		ADCValue = analogRead(CurrentChannel);									   // Take new ADC reading
+		delayMicroseconds(10);													   // Wait ADC to settle
+		ADCValue += analogRead(CurrentChannel);									   // Add new ADC reading
+		ADCValue = ADCValue / 2;												   // Take ADC reading average
+		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	   // Write High Byte
+		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue); // Write Low Byte
+	}
 
-  // Send Packet over serial
-  Serial.write(PacketBuffer, PACKET_LEN);
+	// Send Packet over serial
+	Serial.write(PacketBuffer, PACKET_LEN);
 
-  // Increment the packet counter
-  PacketBuffer[2]++;
+	// Increment the packet counter
+	PacketBuffer[2]++;
 
-  // Status LED / Calibration signal
-  if(PacketBuffer[2] % CAL_SIG_DIVIDER == 0) {
-    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-  }
+	// Status LED / Calibration signal
+	if (PacketBuffer[2] % CAL_SIG_DIVIDER == 0)
+	{
+		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+	}
 }
 
-bool timerBegin(float sampling_rate) {
-  uint8_t timer_type = GPT_TIMER;
-  int8_t timer_channel = FspTimer::get_available_timer(timer_type);
-  if(timer_channel != -1){
-    ChordsTimer.begin(TIMER_MODE_PERIODIC, timer_type, timer_channel, sampling_rate, 0.0f, timerCallback);
-    ChordsTimer.setup_overflow_irq();
-    ChordsTimer.open();
-    return true;
-  } else {
-    return false;
-  }
+bool timerBegin(float sampling_rate)
+{
+	uint8_t timer_type = GPT_TIMER;
+	int8_t timer_channel = FspTimer::get_available_timer(timer_type);
+	if (timer_channel != -1)
+	{
+		ChordsTimer.begin(TIMER_MODE_PERIODIC, timer_type, timer_channel, sampling_rate, 0.0f, timerCallback);
+		ChordsTimer.setup_overflow_irq();
+		ChordsTimer.open();
+		return true;
+	}
+	else
+	{
+		return false;
+	}
 }
 
-bool timerStart() {
-  STATUS = true;
-  digitalWrite(LED_BUILTIN,LOW);
-  return ChordsTimer.start();
+bool timerStart()
+{
+	STATUS = true;
+	digitalWrite(LED_BUILTIN, LOW);
+	return ChordsTimer.start();
 }
 
-bool timerStop() {
-  STATUS = false;
-  digitalWrite(LED_BUILTIN,LOW);
-  return ChordsTimer.stop();
+bool timerStop()
+{
+	STATUS = false;
+	digitalWrite(LED_BUILTIN, LOW);
+	return ChordsTimer.stop();
 }
 
-void setup() {
-  
-  Serial.begin(115200);
-  while (!Serial) {
-    ; // Wait for serial port to connect. Needed for native USB
-  }
+void setup()
+{
 
-  // Status LED 
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN,LOW);
+	Serial.begin(BAUD_RATE);
+	while (!Serial)
+	{
+		; // Wait for serial port to connect. Needed for native USB
+	}
 
-  // Initialize PacketBuffer
-  PacketBuffer[0]   = SYNC_BYTE_1;    //Sync 0
-  PacketBuffer[1]   = SYNC_BYTE_2;    //Sync 1
-  PacketBuffer[2]   = 0;              //Packet counter
-  PacketBuffer[3]   = 0x02;           //CH1 High Byte
-  PacketBuffer[4]   = 0x00;           //CH1 Low Byte
-  PacketBuffer[5]   = 0x02;           //CH2 High Byte
-  PacketBuffer[6]   = 0x00;           //CH2 Low Byte
-  PacketBuffer[7]   = 0x02;           //CH3 High Byte
-  PacketBuffer[8]   = 0x00;           //CH3 Low Byte
-  PacketBuffer[9]   = 0x02;           //CH4 High Byte
-  PacketBuffer[10]  = 0x00;           //CH4 Low Byte
-  PacketBuffer[11]  = 0x02;           //CH5 High Byte
-  PacketBuffer[12]  = 0x00;           //CH5 Low Byte
-  PacketBuffer[13]  = 0x02;           //CH6 High Byte
-  PacketBuffer[14]  = 0x00;           //CH6 Low Byte 
-  PacketBuffer[15]  = END_BYTE;	      //End Byte
+	// Status LED
+	pinMode(LED_BUILTIN, OUTPUT);
+	digitalWrite(LED_BUILTIN, LOW);
 
-  timerBegin(SAMP_RATE);
+	// Initialize PacketBuffer
+	PacketBuffer[0] = SYNC_BYTE_1; // Sync 0
+	PacketBuffer[1] = SYNC_BYTE_2; // Sync 1
+	PacketBuffer[2] = 0;		   // Packet counter
+	PacketBuffer[3] = 0x02;		   // CH1 High Byte
+	PacketBuffer[4] = 0x00;		   // CH1 Low Byte
+	PacketBuffer[5] = 0x02;		   // CH2 High Byte
+	PacketBuffer[6] = 0x00;		   // CH2 Low Byte
+	PacketBuffer[7] = 0x02;		   // CH3 High Byte
+	PacketBuffer[8] = 0x00;		   // CH3 Low Byte
+	PacketBuffer[9] = 0x02;		   // CH4 High Byte
+	PacketBuffer[10] = 0x00;	   // CH4 Low Byte
+	PacketBuffer[11] = 0x02;	   // CH5 High Byte
+	PacketBuffer[12] = 0x00;	   // CH5 Low Byte
+	PacketBuffer[13] = 0x02;	   // CH6 High Byte
+	PacketBuffer[14] = 0x00;	   // CH6 Low Byte
+	PacketBuffer[15] = END_BYTE;   // End Byte
 
-  analogReadResolution(14);
+	timerBegin(SAMP_RATE);
+
+	analogReadResolution(14);
 }
 
-void loop() {
-  if(Serial.available()){
-    // Read command
-    String command = Serial.readString();
-    command.trim();
+void loop()
+{
+	if (Serial.available())
+	{
+		// Read command
+		String command = Serial.readString();
+		command.trim();
 
-    // Who are you?
-    if(command == "WHORU") {
-      Serial.println("UNO-R4");
-    }
+		// Who are you?
+		if (command == "WHORU")
+		{
+			Serial.println("UNO-R4");
+		}
 
-    // Start data acquisition
-    if(command == "START"){
-      timerStart();
-    } 
+		// Start data acquisition
+		if (command == "START")
+		{
+			timerStart();
+		}
 
-    // Stop data acquisition
-    if(command == "STOP") {
-      timerStop();
-    }
+		// Stop data acquisition
+		if (command == "STOP")
+		{
+			timerStop();
+		}
 
-    // Get status
-    if(command == "STATUS") {
-      if(STATUS) {
-        Serial.println("START");
-      } else {
-        Serial.println("STOP");
-      }
-    }
-  }
+		// Get status
+		if (command == "STATUS")
+		{
+			if (STATUS)
+			{
+				Serial.println("START");
+			}
+			else
+			{
+				Serial.println("STOP");
+			}
+		}
+	}
 }
