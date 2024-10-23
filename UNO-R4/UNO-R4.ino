@@ -31,7 +31,6 @@
 #define SYNC_BYTE_1 0xC7							   // Packet first byte
 #define SYNC_BYTE_2 0x7C							   // Packet second byte
 #define END_BYTE 0x01								   // Packet last byte
-#define CAL_SIG_DIVIDER 16							   // Calibration signal divider value
 #define BAUD_RATE 230400							   // Serial connection baud rate
 
 // Global constants and variables
@@ -43,18 +42,32 @@ bool STATUS = false;			  // STATUS bit
 
 FspTimer ChordsTimer;
 
+bool timerStart()
+{
+	STATUS = true;
+	digitalWrite(LED_BUILTIN, HIGH);
+	return ChordsTimer.start();
+}
+
+bool timerStop()
+{
+	STATUS = false;
+	digitalWrite(LED_BUILTIN, LOW);
+	return ChordsTimer.stop();
+}
+
 // callback method used by timer
 void timerCallback(timer_callback_args_t __attribute((unused)) * p_args)
 {
+	if (!STATUS or Serial.available())
+	{
+		timerStop();
+		return;
+	}
 	// Read 6ch ADC inputs and store current values in PacketBuffer
 	for (CurrentChannel = 0; CurrentChannel < NUM_CHANNELS; CurrentChannel++)
 	{
-		ADCValue = analogRead(CurrentChannel);									   // Ignore first reading
-		delayMicroseconds(10);													   // Wait ADC to settle
-		ADCValue = analogRead(CurrentChannel);									   // Take new ADC reading
-		delayMicroseconds(10);													   // Wait ADC to settle
-		ADCValue += analogRead(CurrentChannel);									   // Add new ADC reading
-		ADCValue = ADCValue / 2;												   // Take ADC reading average
+		ADCValue = analogRead(CurrentChannel);									   // Read Analog input
 		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	   // Write High Byte
 		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue); // Write Low Byte
 	}
@@ -64,12 +77,6 @@ void timerCallback(timer_callback_args_t __attribute((unused)) * p_args)
 
 	// Increment the packet counter
 	PacketBuffer[2]++;
-
-	// Status LED / Calibration signal
-	if (PacketBuffer[2] % CAL_SIG_DIVIDER == 0)
-	{
-		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-	}
 }
 
 bool timerBegin(float sampling_rate)
@@ -87,20 +94,6 @@ bool timerBegin(float sampling_rate)
 	{
 		return false;
 	}
-}
-
-bool timerStart()
-{
-	STATUS = true;
-	digitalWrite(LED_BUILTIN, LOW);
-	return ChordsTimer.start();
-}
-
-bool timerStop()
-{
-	STATUS = false;
-	digitalWrite(LED_BUILTIN, LOW);
-	return ChordsTimer.stop();
 }
 
 void setup()

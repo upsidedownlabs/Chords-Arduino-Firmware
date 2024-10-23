@@ -30,7 +30,6 @@
 #define SYNC_BYTE_1 0xC7							   // Packet first byte
 #define SYNC_BYTE_2 0x7C							   // Packet second byte
 #define END_BYTE 0x01								   // Packet last byte
-#define CAL_SIG_DIVIDER 8							   // Calibration signal divider value
 #define BAUD_RATE 230400							   // Serial connection baud rate
 
 // Global constants and variables
@@ -39,6 +38,47 @@ uint8_t CurrentChannel;			  // Current channel being sampled
 uint8_t PacketCounter = 0;		  // Counter for current packet
 uint16_t ADCValue = 0;			  // ADC current value
 bool STATUS = false;			  // STATUS bit
+
+bool timerStart()
+{
+	STATUS = true;
+	digitalWrite(LED_BUILTIN, HIGH);
+	// Enable Timer1 Compare A interrupt
+	return TIMSK1 |= (1 << OCIE1A);
+}
+
+bool timerStop()
+{
+	STATUS = false;
+	digitalWrite(LED_BUILTIN, LOW);
+	// Disable Timer1 Compare A interrupt
+	return TIMSK1 &= ~(1 << OCIE1A);
+	;
+}
+
+// ISR for Timer1 Compare A match (called based on the sampling rate)
+ISR(TIMER1_COMPA_vect)
+{
+	if (!STATUS or Serial.available())
+	{
+		timerStop();
+		return;
+	}
+
+	// Read 6ch ADC inputs and store current values in PacketBuffer
+	for (CurrentChannel = 0; CurrentChannel < NUM_CHANNELS; CurrentChannel++)
+	{
+		ADCValue = analogRead(CurrentChannel);									   // Read Analog input
+		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	   // Write High Byte
+		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue); // Write Low Byte
+	}
+
+	// Send Packet over serial
+	Serial.write(PacketBuffer, PACKET_LEN);
+
+	// Increment the packet counter
+	PacketBuffer[2]++;
+}
 
 bool timerBegin(float sampling_rate)
 {
@@ -64,52 +104,6 @@ bool timerBegin(float sampling_rate)
 	OCR1A = ocrValue;
 
 	sei(); // Enable global interrupts
-}
-
-// ISR for Timer1 Compare A match (called based on the sampling rate)
-ISR(TIMER1_COMPA_vect)
-{
-	// Read 6ch ADC inputs and store current values in PacketBuffer
-	for (CurrentChannel = 0; CurrentChannel < NUM_CHANNELS; CurrentChannel++)
-	{
-		ADCValue = analogRead(CurrentChannel);									   // Ignore first reading
-		delayMicroseconds(10);													   // Wait ADC to settle
-		ADCValue = analogRead(CurrentChannel);									   // Take new ADC reading
-		delayMicroseconds(10);													   // Wait ADC to settle
-		ADCValue += analogRead(CurrentChannel);									   // Add new ADC reading
-		ADCValue = ADCValue / 2;												   // Take ADC reading average
-		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN)] = highByte(ADCValue);	   // Write High Byte
-		PacketBuffer[((2 * CurrentChannel) + HEADER_LEN + 1)] = lowByte(ADCValue); // Write Low Byte
-	}
-
-	// Send Packet over serial
-	Serial.write(PacketBuffer, PACKET_LEN);
-
-	// Increment the packet counter
-	PacketBuffer[2]++;
-
-	// Status LED / Calibration signal
-	if (PacketBuffer[2] % CAL_SIG_DIVIDER == 0)
-	{
-		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-	}
-}
-
-bool timerStart()
-{
-	STATUS = true;
-	digitalWrite(LED_BUILTIN, LOW);
-	// Enable Timer1 Compare A interrupt
-	return TIMSK1 |= (1 << OCIE1A);
-}
-
-bool timerStop()
-{
-	STATUS = false;
-	digitalWrite(LED_BUILTIN, LOW);
-	// Disable Timer1 Compare A interrupt
-	return TIMSK1 &= ~(1 << OCIE1A);
-	;
 }
 
 void setup()
@@ -163,14 +157,12 @@ void loop()
 		// Start data acquisition
 		if (command == "START")
 		{
-			STATUS = true;
 			timerStart();
 		}
 
 		// Stop data acquisition
 		if (command == "STOP")
 		{
-			STATUS = false;
 			timerStop();
 		}
 
