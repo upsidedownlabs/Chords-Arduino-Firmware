@@ -34,7 +34,6 @@
 #include <Adafruit_NeoPixel.h>
 #include <sdkconfig.h>
 #include "hal/efuse_hal.h"
-#include "esp_gap_ble_api.h"
 #include "esp_idf_version.h"
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
@@ -189,14 +188,6 @@ static inline void resetSampleState()
 static adc_continuous_handle_t adc_handle = nullptr;
 static bool adc_started = false;
 static SemaphoreHandle_t adc_data_semaphore = nullptr;
-static esp_ble_adv_params_t advParams = {
-    .adv_int_min = 0x0128,
-    .adv_int_max = 0x0128,
-    .adv_type = ADV_TYPE_IND,
-    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-    .channel_map = ADV_CHNL_ALL,
-    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY};
-
 // Helper macros to parse DMA results as TYPE2 format on C3/C6
 #define ADC_OUTPUT_TYPE ADC_DIGI_OUTPUT_FORMAT_TYPE2
 #define ADC_GET_CHANNEL(p) ((p)->type2.channel)
@@ -220,11 +211,32 @@ class MyServerCallbacks : public BLEServerCallbacks
     vTaskDelay(200 / portTICK_PERIOD_MS);
     digitalWrite(LED_BUILTIN, LOW);
 
-    // Apply -3 dBm to the active connection
-    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N3);
-    esp_ble_gap_stop_advertising(); // Explicitly stop advertising
+    // Apply +9 dBm to the active connection
+    BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_CONN_HDL0);
+    BLEDevice::stopAdvertising(); // Explicitly stop advertising
   }
-
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  void onConnect(BLEServer *pServer, esp_ble_gatts_cb_param_t *param) override
+  {
+    // Request a 7.5-15 ms connection interval while preserving the
+    // connection's current latency and supervision timeout.
+    pServer->updateConnParams(
+        param->connect.remote_bda,
+        0x0006, // 6 * 1.25 ms = 7.5 ms
+        0x000C, // 12 * 1.25 ms = 15 ms
+        param->connect.conn_params.latency,
+        param->connect.conn_params.timeout);
+  }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+    void onConnect(BLEServer *pServer, struct ble_gap_conn_desc *desc) override {
+    pServer->requestConnParams(
+      desc->conn_handle,
+      6,   // 6 * 1.25 ms = 7.5 ms
+      12,  // 12 * 1.25 ms = 15 ms
+      desc->conn_latency,
+      desc->supervision_timeout);
+  }
+#endif
   void onDisconnect(BLEServer *pServer) override
   {
     pixels.setPixelColor(0, pixels.Color(PIXEL_BRIGHTNESS, 0, 0)); // Red on disconnect
@@ -250,7 +262,7 @@ class MyServerCallbacks : public BLEServerCallbacks
     ledBlinkCycles = -1;
 
     adc_stop_requested = true; // Request stop
-    esp_ble_gap_start_advertising(&advParams);
+    BLEDevice::startAdvertising();
   }
 };
 
@@ -434,7 +446,7 @@ void checkBatteryAndDisconnect()
     adc_dma_stop();
 
     // Stop advertising to save power while blinking before deep sleep
-    esp_ble_gap_stop_advertising();
+    BLEDevice::stopAdvertising();
 
     // Disconnect BLE client if connected
     if (pBLEServer != nullptr && pBLEServer->getConnectedCount() > 0)
@@ -574,11 +586,6 @@ void setup()
     sprintf(deviceName, "NPG-Lite-3CH:%02X:%02X", mac[4], mac[5]);
   BLEDevice::init(deviceName);
 
-  // Set BLE TX power to -3 dBm for default/advertising/scan
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_N3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N3);
-
   // larger MTU for efficiency (doesn't change packet format)
   BLEDevice::setMTU(500);
 
@@ -606,27 +613,7 @@ void setup()
 
   pService->start();
 
-  // Configure advertising data to include device name
-  esp_ble_adv_data_t adv_data = {};
-  adv_data.set_scan_rsp = false;
-  adv_data.include_name = true;
-  adv_data.include_txpower = false;
-  adv_data.min_interval = 0x0006;
-  adv_data.max_interval = 0x0010;
-  adv_data.appearance = 0x00;
-  adv_data.manufacturer_len = 0;
-  adv_data.p_manufacturer_data = nullptr;
-  adv_data.service_data_len = 0;
-  adv_data.p_service_data = nullptr;
-  adv_data.service_uuid_len = 0;
-  adv_data.p_service_uuid = nullptr;
-  adv_data.flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
-
-  esp_ble_gap_config_adv_data(&adv_data);
-
-  // Stop Arduino's advertising helper and start with our params
-  BLEDevice::getAdvertising()->stop(); // if it was started elsewhere
-  esp_ble_gap_start_advertising(&advParams);
+  BLEDevice::startAdvertising();
 }
 
 void loop()
