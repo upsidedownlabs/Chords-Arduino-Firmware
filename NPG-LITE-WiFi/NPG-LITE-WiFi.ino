@@ -30,12 +30,29 @@
 #include <WebSocketsServer.h>
 #include <Adafruit_NeoPixel.h>
 #include <ESPmDNS.h>
+#include <sdkconfig.h>
 
+// Supported Playmates
+#define PROTO_PLAYMATE 0      // Proto (3 BioAmp channels, no buzzer or vibration motor)
+#define VIBZ_PLAYMATE 1       // Vibz (3 BioAmp channels, buzzer and vibration motor)
+#define VIBZ_PLUS_PLAYMATE 2  // Vibz Plus (6 BioAmp channels, buzzer and vibration motor)
+
+// ----- Chip-specific Pin Definitions -----
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+#define LED_BUILTIN 7
+#define PIXEL_PIN 15
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+#define LED_BUILTIN 6
+#define PIXEL_PIN 3
+#else
+#error "Unsupported board: Please target either ESP32-C6 or ESP32-C3 in your Board Manager."
+#endif
+
+#define BUZZER_PIN 8
 #define TRIGGER_PIN 9
 #define PIXEL_BRIGHTNESS 7
 #define TIMER_FREQ 1000000
 #define MOTOR_PIN 7
-#define PIXEL_PIN 3
 #define LED_PIN 6
 // Websockets connection on port 81
 WebSocketsServer webSocket = WebSocketsServer(81);
@@ -53,26 +70,29 @@ int sampling_rate = 500; // change this to change sampling rate in Hz
 int FPS = 25;            // change this to change FPS i.e number of packets sent per second
 
 int total_blocks = (int)(sampling_rate / FPS);
-int BLOCK_SIZE = 13;
-uint8_t *packetBytes = (uint8_t *)calloc(total_blocks * BLOCK_SIZE, sizeof(uint8_t));
+int BLOCK_SIZE = 13;                      // Counter + channel slots + trigger (set by checkPlaymate)
+static uint8_t NUM_CHANNELS = 3;          // Number of BioAmp channels (set by checkPlaymate)
+static uint8_t Playmate = PROTO_PLAYMATE; // PROTO_PLAYMATE, VIBZ_PLAYMATE, or VIBZ_PLUS_PLAYMATE
+uint8_t *packetBytes = NULL;
 bool wm = false; // WiFiManager portal access
 bool ws_connected = false;
-const char *ssid = "npg-lite-2";
+const char *ssid = "NPG-Lite-3CH";     // Set by checkPlaymate
+const char *mdnsName = "npg-lite-3ch"; // Set by checkPlaymate (npg-lite-3ch.local / npg-lite-6ch.local)
 const char *password = "";
 bool istrigger = false; // Trigger for user to do action
 
-uint8_t adc_pins[] = {0, 1, 2};
+uint8_t adc_pins[] = {0, 1, 2, 3, 4, 5};
 
 volatile int interruptCounter = 0;
-uint8_t *blockbytes = (uint8_t *)calloc(BLOCK_SIZE - 1, sizeof(uint8_t));
+uint8_t *blockbytes = NULL;
 
 void IRAM_ATTR DRDY_ISR()
 {
-    memset(blockbytes, 0, 12);
+    memset(blockbytes, 0, BLOCK_SIZE - 1);
     if (ws_connected)
     {
         portENTER_CRITICAL_ISR(&timermux_1);
-        for (int i = 0; i < sizeof(adc_pins) / sizeof(uint8_t); i++)
+        for (int i = 0; i < NUM_CHANNELS; i++)
         {
             uint16_t res = analogRead(adc_pins[i]);
             blockbytes[2 * i] = (uint8_t)(res >> 8);
@@ -144,10 +164,68 @@ void webSocketEvent(byte num, WStype_t type, uint8_t *payload, size_t length)
         break;
     }
 }
+
+// --------Check Playmate-------
+
+void checkPlaymate()
+{
+    pinMode(LED_BUILTIN, INPUT_PULLUP);
+    pinMode(BUZZER_PIN, INPUT_PULLUP);
+    if (digitalRead(LED_BUILTIN) == HIGH && digitalRead(BUZZER_PIN) == HIGH)
+    {
+        Playmate = PROTO_PLAYMATE;
+    }
+    else
+    {
+        Playmate = VIBZ_PLAYMATE; // Assume Vibz until Vibz Plus is detected
+        // Check for Vibz Plus Playmate
+        pinMode(A3, INPUT_PULLUP);
+        pinMode(A4, INPUT_PULLUP);
+        pinMode(A5, INPUT_PULLUP);
+        unsigned long start = millis();
+        while (millis() - start < 100)
+        {
+            if (digitalRead(A3) == LOW || digitalRead(A4) == LOW || digitalRead(A5) == LOW)
+            {
+                Playmate = VIBZ_PLUS_PLAYMATE;
+                break;
+            }
+        }
+        // Restore high-impedance inputs before ADC use
+        pinMode(A3, INPUT);
+        pinMode(A4, INPUT);
+        pinMode(A5, INPUT);
+    }
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+    // Configure active channels and block size
+    // 3CH: counter(1) + 6 slots(12, unused slots zero, last slot = trigger) = 13 bytes (unchanged)
+    // 6CH: counter(1) + 6 channels(12) + trigger(2) = 15 bytes
+    if (Playmate == VIBZ_PLUS_PLAYMATE)
+    {
+        NUM_CHANNELS = 6;
+        BLOCK_SIZE = 15;
+        ssid = "NPG-Lite-6CH";
+        mdnsName = "npg-lite-6ch";
+    }
+    else
+    {
+        NUM_CHANNELS = 3;
+        BLOCK_SIZE = 13;
+        ssid = "NPG-Lite-3CH";
+        mdnsName = "npg-lite-3ch";
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
     vTaskDelay(100 / portTICK_PERIOD_MS);
+    checkPlaymate(); // Must run before anything sized by BLOCK_SIZE is allocated
+    blockbytes = (uint8_t *)calloc(BLOCK_SIZE - 1, sizeof(uint8_t));
+    packetBytes = (uint8_t *)calloc(total_blocks * BLOCK_SIZE, sizeof(uint8_t));
     // Trigger pin to put device in AP mode
     pinMode(TRIGGER_PIN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
@@ -221,7 +299,7 @@ void setup()
     }
 
     // Initiate MDNS
-    if (!MDNS.begin("multi-emg"))
+    if (!MDNS.begin(mdnsName))
     {
         Serial.println("Error setting up MDNS responder!");
         while (1)
@@ -250,7 +328,6 @@ void setup()
     timerAttachInterrupt(timer_1, &DRDY_ISR);
     timerAlarm(timer_1, (int)(TIMER_FREQ / sampling_rate), true, 0);
     analogReadResolution(12);
-    memset(packetBytes, 0, total_blocks * BLOCK_SIZE);
 }
 
 uint8_t counter = 0;
