@@ -41,10 +41,12 @@
 #include "freertos/task.h"
 
 // ADC includes
-#include "esp_bt.h"                  // release Classic BT memory
-#include "esp_adc/adc_continuous.h"  // ADC continuous (DMA) driver
-#include "hal/adc_types.h"           // adc_atten_t, bit width, etc.
-#include "soc/soc_caps.h"            // SOC_ADC_DIGI_RESULT_BYTES
+#include "esp_bt.h"                   // release Classic BT memory
+#include "esp_adc/adc_continuous.h"   // ADC continuous (DMA) driver
+#include "esp_adc/adc_cali.h"         // ADC raw-to-millivolts calibration
+#include "esp_adc/adc_cali_scheme.h"  // Curve-fitting calibration scheme
+#include "hal/adc_types.h"            // adc_atten_t, bit width, etc.
+#include "soc/soc_caps.h"             // SOC_ADC_DIGI_RESULT_BYTES
 
 // Supported Playmates
 #define PROTO_PLAYMATE 0      // Proto (3 BioAmp channels, no buzzer or vibration motor)
@@ -160,12 +162,12 @@ uint8_t overallCounter = 0;
 // Battery monitoring - stores latest ADC reading from A6
 static volatile uint16_t latestBatteryRaw = 0;
 
-// Battery averaging: log one battery ADC value per completed data packet
+// Battery averaging: log one calibrated battery-pin value (mV) per completed data packet
 // Average all collected samples once per battery check interval
 static uint32_t batteryWinStartMs = 0;
 static uint32_t batteryWinSum = 0;
 static uint16_t batteryWinCount = 0;
-static uint16_t batteryAvgToSend = 0;  // 0 when not ready yet
+static uint16_t batteryAvgToSend = 0;  // Calibrated battery-pin mV; 0 when not ready yet
 static uint16_t isCharging = 0;        // 0 when not charging
 static uint8_t lastBatteryPct = 255;   // 255 is unset
 static uint8_t consecutiveChargingCheck = 3;
@@ -184,6 +186,7 @@ static inline void resetSampleState() {
 
 // ----- ADC DMA (continuous mode) globals -----
 static adc_continuous_handle_t adc_handle = nullptr;
+static adc_cali_handle_t battery_cali_handle = nullptr;  // ADC1 channel 6 only
 static bool adc_started = false;
 static SemaphoreHandle_t adc_data_semaphore = nullptr;
 // Helper macros to parse DMA results as TYPE2 format on C3/C6
@@ -355,8 +358,8 @@ void checkBatteryAndDisconnect() {
   if (batteryAvgToSend == 0)
     return;
 
-  float voltage = (batteryAvgToSend / 1000.0) * 2;  // for ESP32C6 v0.1
-  voltage = voltage - 0.02;
+  float voltage = (batteryAvgToSend / 1000.0) * 2;  // Calibrated pin mV -> battery V (equal divider)
+  voltage = voltage + 0.05;                         // offest caused by tolerance in resistors used for voltage divider
   float percentage = ceil(interpolatePercentage(voltage));
 
   // Send decreased battery percentage immediately
@@ -436,7 +439,7 @@ void checkInitialBattery() {
   unsigned long startMillis = millis();
   while (millis() - startMillis < 100)  // Collect battery voltage samples for 100ms
   {
-    int analogValue = analogRead(BATTERY_PIN);
+    int analogValue = analogReadMilliVolts(BATTERY_PIN);
     sum += analogValue;
     count++;
   }
@@ -444,9 +447,9 @@ void checkInitialBattery() {
   if (count == 0)
     return;
 
-  float initialBatteryRaw = sum / count;
-  float voltage = (initialBatteryRaw / 1000.0) * 2;  // for ESP32C6 v0.1
-  voltage = voltage - 0.02;
+  float initialBatteryMilliVolts = sum / count;
+  float voltage = (initialBatteryMilliVolts / 1000.0) * 2;  // Calibrated pin mV -> battery V (equal divider)
+  voltage = voltage + 0.05;
   float initialBatteryPercentage = ceil(interpolatePercentage(voltage));  // Calculate battery percentage from LUT
 
   // If battery is low, slowly blink the neopixel
@@ -601,6 +604,15 @@ static const uint8_t hw_chs_4[4] = { 0, 1, 2, 6 };           // Configuration fo
 static const uint8_t hw_chs_7[7] = { 0, 1, 2, 3, 4, 5, 6 };  // Configuration for 6 BioAmp Channels
 
 static void adc_dma_init() {
+  // Create once and reuse across ADC stop/start cycles; used only for battery channel 6.
+  if (battery_cali_handle == nullptr) {
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id = ADC_UNIT_1;
+    cali_cfg.chan = ADC_CHANNEL_6;
+    cali_cfg.atten = ADC_ATTEN_DB_11;
+    cali_cfg.bitwidth = ADC_BITWIDTH_12;
+    ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cali_cfg, &battery_cali_handle));
+  }
 
   static adc_digi_pattern_config_t pattern[NUM_CHANNELS_MAX];
   const uint8_t *hw_chs = (NUM_CHANNELS == 7) ? hw_chs_7 : hw_chs_4;  // Use appropriate channel configuration
@@ -754,12 +766,12 @@ static void handle_adc_dma_and_notify() {
         if (sampleIndex >= BLOCK_COUNT) {
           sampleIndex = 0;
 
-          // Log one battery ADC value per completed packet
-          if (NUM_CHANNELS > 0) {
-            uint16_t batt = last_vals[NUM_CHANNELS - 1];
-            batteryWinSum += batt;
-            batteryWinCount++;
-          }
+          // Log one calibrated battery-pin value in millivolts per completed packet.
+          int battMilliVolts = 0;
+          ESP_ERROR_CHECK(adc_cali_raw_to_voltage(
+            battery_cali_handle, last_vals[NUM_CHANNELS - 1], &battMilliVolts));
+          batteryWinSum += battMilliVolts;
+          batteryWinCount++;
 
           // Every BATTERY_CHECK_INTERVAL, compute window average and update latch (decreasing-only)
           uint32_t nowMs = millis();
