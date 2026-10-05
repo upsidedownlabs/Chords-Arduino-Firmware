@@ -22,7 +22,7 @@ boards into bio-potential data acquisition devices when paired with BioAmp hardw
 
 | Board | Voltage | Channels | Resolution | SamplingRate | BaudRate | Code |
 | ----- | ------- | -------- | ---------- | ------------ | -------- | ---- |
-| Neuro Play Ground (NPG) Lite | 2V5 | 3 | 12-bit | 500 | 230400 | [NPG-LITE.ino](NPG-LITE/NPG-LITE.ino) |
+| Neuro Play Ground (NPG) Lite | 2V5 | 3-6 | 12-bit | 500 | 230400 | [NPG-LITE.ino](NPG-LITE/NPG-LITE.ino) |
 | STM32G4 Core Board | 3V3 | 16 | 12-bit | 500 | 230400 | [STM32G4-CORE-BOARD.ino](STM32G4-CORE-BOARD/STM32G4-CORE-BOARD.ino) |
 | STM32F4 Black Pill | 3V3 | 8 | 12-bit | 500 | 230400 | [STM32F4-BLACK-PILL.ino](STM32F4-BLACK-PILL/STM32F4-BLACK-PILL.ino) |
 | Arduino GIGA R1 (WiFi) | 3V3 | 6 | 16-bit | 500 | 230400 | [GIGA-R1.ino](GIGA-R1/GIGA-R1.ino) |
