@@ -235,7 +235,7 @@ void loop()
 
     if (command == "WHORU") // Who are you?
     {
-      Serial.println("NPG-LITE");
+      Serial.println(Playmate == VIBZ_PLUS_PLAYMATE ? "NPG-LITE-6CH" : "NPG-LITE-3CH");
     }
     else if (command == "START") // Start data acquisition
     {
