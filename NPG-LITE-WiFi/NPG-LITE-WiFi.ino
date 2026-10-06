@@ -31,6 +31,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ESPmDNS.h>
 #include <sdkconfig.h>
+#include "hal/efuse_hal.h"
 
 // Supported Playmates
 #define PROTO_PLAYMATE 0      // Proto (3 BioAmp channels, no buzzer or vibration motor)
@@ -39,6 +40,8 @@
 
 // ----- Chip-specific Pin Definitions -----
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
+// Store chip revision number
+uint32_t chiprev = efuse_hal_chip_revision();
 #define LED_BUILTIN 7
 #define PIXEL_PIN 15
 #elif defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -95,6 +98,10 @@ void IRAM_ATTR DRDY_ISR()
         for (int i = 0; i < NUM_CHANNELS; i++)
         {
             uint16_t res = analogRead(adc_pins[i]);
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+            if (chiprev == 1)
+                res = map(res, 0, 3249, 0, 4095); // Scale to 12-bit range
+#endif
             blockbytes[2 * i] = (uint8_t)(res >> 8);
             blockbytes[2 * i + 1] = (uint8_t)(res & 0xFF);
         }
