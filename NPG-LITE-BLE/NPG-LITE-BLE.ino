@@ -444,7 +444,9 @@ void checkInitialBattery() {
   unsigned long startMillis = millis();
   while (millis() - startMillis < 100)  // Collect battery voltage samples for 100ms
   {
-    int analogValue = analogReadMilliVolts(BATTERY_PIN);
+    int analogValue = batteryCalibrationAvailable
+                    ? analogReadMilliVolts(BATTERY_PIN)
+                    : analogRead(BATTERY_PIN);
     sum += analogValue;
     count++;
   }
