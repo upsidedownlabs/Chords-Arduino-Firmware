@@ -162,12 +162,12 @@ uint8_t overallCounter = 0;
 // Battery monitoring - stores latest ADC reading from A6
 static volatile uint16_t latestBatteryRaw = 0;
 
-// Battery averaging: log one calibrated battery-pin value (mV) per completed data packet
+// Battery averaging: log one battery value per completed data packet.
 // Average all collected samples once per battery check interval
 static uint32_t batteryWinStartMs = 0;
 static uint32_t batteryWinSum = 0;
 static uint16_t batteryWinCount = 0;
-static uint16_t batteryAvgToSend = 0;  // Calibrated battery-pin mV; 0 when not ready yet
+static uint16_t batteryAvgToSend = 0;  // Calibrated pin mV or raw counts; 0 when not ready yet
 static uint16_t isCharging = 0;        // 0 when not charging
 static uint8_t lastBatteryPct = 255;   // 255 is unset
 static uint8_t consecutiveChargingCheck = 3;
@@ -187,6 +187,7 @@ static inline void resetSampleState() {
 // ----- ADC DMA (continuous mode) globals -----
 static adc_continuous_handle_t adc_handle = nullptr;
 static adc_cali_handle_t battery_cali_handle = nullptr;  // ADC1 channel 6 only
+static bool batteryCalibrationAvailable = false;         // Set once during setup
 static bool adc_started = false;
 static SemaphoreHandle_t adc_data_semaphore = nullptr;
 // Helper macros to parse DMA results as TYPE2 format on C3/C6
@@ -358,8 +359,12 @@ void checkBatteryAndDisconnect() {
   if (batteryAvgToSend == 0)
     return;
 
-  float voltage = (batteryAvgToSend / 1000.0) * 2;  // Calibrated pin mV -> battery V (equal divider)
-  voltage = voltage + 0.05;                         // offest caused by tolerance in resistors used for voltage divider
+  float voltage = (batteryAvgToSend / 1000.0) * 2;
+  if (batteryCalibrationAvailable) {
+    voltage = voltage + 0.05;  // Calibrated version
+  } else {
+    voltage = voltage - 0.02;
+  }
   float percentage = ceil(interpolatePercentage(voltage));
 
   // Send decreased battery percentage immediately
@@ -447,9 +452,13 @@ void checkInitialBattery() {
   if (count == 0)
     return;
 
-  float initialBatteryMilliVolts = sum / count;
-  float voltage = (initialBatteryMilliVolts / 1000.0) * 2;  // Calibrated pin mV -> battery V (equal divider)
-  voltage = voltage + 0.05;
+  float initialBatteryAverage = sum / count;  // Calibrated pin mV or raw counts
+  float voltage = (initialBatteryAverage / 1000.0) * 2;
+  if (batteryCalibrationAvailable) {
+    voltage = voltage + 0.05;
+  } else {
+    voltage = voltage - 0.02;
+  }
   float initialBatteryPercentage = ceil(interpolatePercentage(voltage));  // Calculate battery percentage from LUT
 
   // If battery is low, slowly blink the neopixel
@@ -507,6 +516,20 @@ void setup() {
   setCpuFrequencyMhz(80);
 
   checkPlaymate();
+
+  adc_cali_curve_fitting_config_t cali_cfg = {};
+  cali_cfg.unit_id = ADC_UNIT_1;
+  cali_cfg.chan = ADC_CHANNEL_6;
+  cali_cfg.atten = ADC_ATTEN_DB_11;
+  cali_cfg.bitwidth = ADC_BITWIDTH_12;
+
+  esp_err_t err = adc_cali_create_scheme_curve_fitting(&cali_cfg, &battery_cali_handle);
+  if (err == ESP_OK) {
+    batteryCalibrationAvailable = true;
+  } else {
+    batteryCalibrationAvailable = false;
+    battery_cali_handle = nullptr;
+  }
 
   checkInitialBattery();  // Check initial battery status
 
@@ -604,15 +627,6 @@ static const uint8_t hw_chs_4[4] = { 0, 1, 2, 6 };           // Configuration fo
 static const uint8_t hw_chs_7[7] = { 0, 1, 2, 3, 4, 5, 6 };  // Configuration for 6 BioAmp Channels
 
 static void adc_dma_init() {
-  // Create once and reuse across ADC stop/start cycles; used only for battery channel 6.
-  if (battery_cali_handle == nullptr) {
-    adc_cali_curve_fitting_config_t cali_cfg = {};
-    cali_cfg.unit_id = ADC_UNIT_1;
-    cali_cfg.chan = ADC_CHANNEL_6;
-    cali_cfg.atten = ADC_ATTEN_DB_11;
-    cali_cfg.bitwidth = ADC_BITWIDTH_12;
-    ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cali_cfg, &battery_cali_handle));
-  }
 
   static adc_digi_pattern_config_t pattern[NUM_CHANNELS_MAX];
   const uint8_t *hw_chs = (NUM_CHANNELS == 7) ? hw_chs_7 : hw_chs_4;  // Use appropriate channel configuration
@@ -766,12 +780,19 @@ static void handle_adc_dma_and_notify() {
         if (sampleIndex >= BLOCK_COUNT) {
           sampleIndex = 0;
 
-          // Log one calibrated battery-pin value in millivolts per completed packet.
-          int battMilliVolts = 0;
-          ESP_ERROR_CHECK(adc_cali_raw_to_voltage(
-            battery_cali_handle, last_vals[NUM_CHANNELS - 1], &battMilliVolts));
-          batteryWinSum += battMilliVolts;
-          batteryWinCount++;
+          // Log one battery value per completed packet, using the mode selected at boot.
+          if (NUM_CHANNELS > 0) {
+            uint16_t batt = last_vals[NUM_CHANNELS - 1];
+            if (batteryCalibrationAvailable) {
+              int battMilliVolts = 0;
+              ESP_ERROR_CHECK(adc_cali_raw_to_voltage(
+                battery_cali_handle, batt, &battMilliVolts));
+              batteryWinSum += battMilliVolts;
+            } else {
+              batteryWinSum += batt;
+            }
+            batteryWinCount++;
+          }
 
           // Every BATTERY_CHECK_INTERVAL, compute window average and update latch (decreasing-only)
           uint32_t nowMs = millis();
