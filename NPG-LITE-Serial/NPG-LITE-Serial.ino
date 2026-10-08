@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
-// Copyright (c) 2024 - 2025 Upside Down Labs - contact@upsidedownlabs.tech
-// Author: Deepak Khatri
+// Copyright (c) 2024 - 2026 Upside Down Labs - contact@upsidedownlabs.tech
+// Copyright (c) 2024 - 2026 Deepak Khatri - deepak@upsidedownlabs.tech
+// Copyright (c) 2024 - 2026 Krishnanshu Mittal - krishnanshu@upsidedownlabs.tech
 //
 // At Upside Down Labs, we create open-source DIY neuroscience hardware and software.
 // Our mission is to make neuroscience affordable and accessible for everyone.
@@ -24,6 +25,11 @@
 #include "hal/efuse_hal.h"
 #include <Adafruit_NeoPixel.h>
 
+// Supported Playmates
+#define PROTO_PLAYMATE 0      // Proto (3 BioAmp channels, no buzzer or vibration motor)
+#define VIBZ_PLAYMATE 1       // Vibz (3 BioAmp channels, buzzer and vibration motor)
+#define VIBZ_PLUS_PLAYMATE 2  // Vibz Plus (6 BioAmp channels, buzzer and vibration motor)
+
 // ----- Chip-specific Pin Definitions -----
 //
 // Use the ESP-IDF config macros to detect the chip.
@@ -31,10 +37,12 @@
 // Store chip revision number
 uint32_t chiprev = efuse_hal_chip_revision();
 #define LED_BUILTIN 7
+#define BUZZER_PIN 8
 #define PIXEL_PIN 15
 #define PIXEL_COUNT 6
 #elif defined(CONFIG_IDF_TARGET_ESP32C3)
 #define LED_BUILTIN 6
+#define BUZZER_PIN 8
 #define PIXEL_PIN 3
 #define PIXEL_COUNT 4
 #else
@@ -44,20 +52,25 @@ uint32_t chiprev = efuse_hal_chip_revision();
 // Definitions
 #define PIXEL_BRIGHTNESS 7 // Brightness of Neopixel LED
 #define TIMER_FREQ 1000000
-#define NUM_CHANNELS 3                                 // Number of channels supported
-#define HEADER_LEN 3                                   // Header = SYNC_BYTE_1 + SYNC_BYTE_2 + Counter
-#define PACKET_LEN (NUM_CHANNELS * 2 + HEADER_LEN + 1) // Packet length = Header + Data + END_BYTE
-#define SAMP_RATE 500.0                                // Sampling rate (250/500 for UNO R4)
-#define SYNC_BYTE_1 0xC7                               // Packet first byte
-#define SYNC_BYTE_2 0x7C                               // Packet second byte
-#define END_BYTE 0x01                                  // Packet last byte
-#define BAUD_RATE 230400                               // Serial connection baud rate
+#define NUM_CHANNELS_MAX 6                                     // Max channels supported (Vibz Plus Playmate)
+#define HEADER_LEN 3                                           // Header = SYNC_BYTE_1 + SYNC_BYTE_2 + Counter
+#define PACKET_LEN_MAX (NUM_CHANNELS_MAX * 2 + HEADER_LEN + 1) // Max packet length = Header + Data + END_BYTE
+#define SAMP_RATE 500.0                                        // Sampling rate (250/500 for UNO R4)
+#define SYNC_BYTE_1 0xC7                                       // Packet first byte
+#define SYNC_BYTE_2 0x7C                                       // Packet second byte
+#define END_BYTE 0x01                                          // Packet last byte
+#define BAUD_RATE 230400                                       // Serial connection baud rate
 
 // Onboard Neopixel at PIXEL_PIN
 Adafruit_NeoPixel pixels(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
+// Global variables for Channel count and packet size
+static uint8_t NUM_CHANNELS = 3;          // Number of BioAmp channels (set by checkPlaymate)
+static uint8_t PACKET_LEN = 0;            // Packet length = Header + Data + END_BYTE
+static uint8_t Playmate = PROTO_PLAYMATE; // PROTO_PLAYMATE, VIBZ_PLAYMATE, or VIBZ_PLUS_PLAYMATE
+
 // Global constants and variables
-uint8_t packetBuffer[PACKET_LEN]; // The transmission packet
+uint8_t packetBuffer[PACKET_LEN_MAX]; // The transmission packet
 uint8_t currentChannel;           // Current channel being sampled
 uint16_t adcValue = 0;            // ADC current value
 bool timerStatus = false;         // Timer status bit
@@ -104,6 +117,49 @@ void timerStop()
   digitalWrite(LED_BUILTIN, LOW);
 }
 
+// --------Check Playmate-------
+
+void checkPlaymate()
+{
+  pinMode(LED_BUILTIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, INPUT_PULLUP);
+  if (digitalRead(LED_BUILTIN) == HIGH && digitalRead(BUZZER_PIN) == HIGH)
+  {
+    Playmate = PROTO_PLAYMATE;
+  }
+  else
+  {
+    Playmate = VIBZ_PLAYMATE; // Assume Vibz until Vibz Plus is detected
+    // Check for Vibz Plus Playmate
+    pinMode(A3, INPUT_PULLUP);
+    pinMode(A4, INPUT_PULLUP);
+    pinMode(A5, INPUT_PULLUP);
+    unsigned long start = millis();
+    while (millis() - start < 100)
+    {
+      if (digitalRead(A3) == LOW || digitalRead(A4) == LOW || digitalRead(A5) == LOW)
+      {
+        Playmate = VIBZ_PLUS_PLAYMATE;
+        break;
+      }
+    }
+    // Restore high-impedance inputs before ADC use
+    pinMode(A3, INPUT);
+    pinMode(A4, INPUT);
+    pinMode(A5, INPUT);
+  }
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+  // Configure active channels and packet size
+  if (Playmate == VIBZ_PLUS_PLAYMATE)
+    NUM_CHANNELS = 6;
+  else
+    NUM_CHANNELS = 3;
+  PACKET_LEN = NUM_CHANNELS * 2 + HEADER_LEN + 1;
+}
+
 void setup()
 {
 
@@ -121,6 +177,8 @@ void setup()
   // Status LED
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
+
+  checkPlaymate(); // Detect Playmate and set NUM_CHANNELS / PACKET_LEN
 
   // Initialize packetBuffer
   packetBuffer[0] = SYNC_BYTE_1;           // Sync 0
@@ -177,7 +235,7 @@ void loop()
 
     if (command == "WHORU") // Who are you?
     {
-      Serial.println("NPG-LITE");
+      Serial.println(Playmate == VIBZ_PLUS_PLAYMATE ? "NPG-LITE-6CH" : "NPG-LITE-3CH");
     }
     else if (command == "START") // Start data acquisition
     {
