@@ -149,8 +149,9 @@ jobs:
           case "${{ matrix.output }}" in
             # AVR: convert Intel HEX to raw binary
             hex) objcopy -I ihex -O binary "$src" "dist/Chords-${{ matrix.name }}.bin" ;;
-            # ESP32 merged image (bootloader + partitions + app) is flashed at 0x0
-            merged.bin) cp "$src" "dist/Chords-${{ matrix.name }}.bin" ;;
+            # ESP32 merged image (bootloader + partitions + app) is flashed at 0x0;
+            # keep "merged" in the name so flashers (e.g. NPG-Lite-Flasher-Web) pick 0x0
+            merged.bin) cp "$src" "dist/Chords-${{ matrix.name }}.merged.bin" ;;
             *) cp "$src" "dist/Chords-${{ matrix.name }}.${{ matrix.output }}" ;;
           esac
           ls -l dist
@@ -185,9 +186,11 @@ jobs:
       - name: Create release
         run: |
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            # Re-run for an existing tag: replace the binaries on its release
+            # Re-run for an existing tag: replace the binaries and make it latest again
             gh release upload "$VERSION" dist/* --clobber
+            gh release edit "$VERSION" --latest
           else
+            # The most recently pushed tag always becomes "latest", whatever its version
             gh release create "$VERSION" dist/* --verify-tag \
               --title "$VERSION" --notes "Built from commit ${GITHUB_SHA::7}." --latest
           fi
