@@ -1,0 +1,201 @@
+name: Build firmware
+
+# - Pull request / push to main: compile all boards (build check only).
+# - Push a version tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`): compile all boards
+#   and publish the binaries to a GitHub Release for that tag.
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Board manager URLs for third-party cores
+  ADDITIONAL_URLS: >-
+    https://espressif.github.io/arduino-esp32/package_esp32_index.json,https://github.com/stm32duino/BoardManagerFiles/raw/main/package_stmicroelectronics_index.json
+  # Required libraries (installed for every build, cheap)
+  LIBRARIES: >-
+    "Adafruit NeoPixel" "WiFiManager" "WebSockets" "Arduino_AdvancedAnalog"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---------- NPG Lite (ESP32-C6) ----------
+          - name: NPG-LITE-Serial-ESP32C6
+            sketch: NPG-LITE-Serial
+            core: esp32:esp32@3.2.0
+            fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
+            output: merged.bin
+          # NPG-LITE-BLE uses A6 (battery pin), which only exists on ESP32-C6
+          - name: NPG-LITE-BLE-ESP32C6
+            sketch: NPG-LITE-BLE
+            core: esp32:esp32@3.2.0
+            fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
+            output: merged.bin
+          - name: NPG-LITE-WiFi-ESP32C6
+            sketch: NPG-LITE-WiFi
+            core: esp32:esp32@3.2.0
+            fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
+            output: merged.bin
+
+          # ---------- ESP32-S3 ----------
+          - name: ESP32-S3
+            sketch: ESP32-S3
+            core: esp32:esp32@3.2.0
+            fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc
+            output: merged.bin
+
+          # ---------- STM32 ----------
+          - name: STM32G4-CORE-BOARD
+            sketch: STM32G4-CORE-BOARD
+            core: STMicroelectronics:stm32@2.10.1
+            fqbn: STMicroelectronics:stm32:GenG4:pnum=GENERIC_G431CBUX,usb=CDCgen
+            output: bin
+          - name: STM32F401CC-BLACK-PILL
+            sketch: STM32F4-BLACK-PILL
+            core: STMicroelectronics:stm32@2.10.1
+            fqbn: STMicroelectronics:stm32:GenF4:pnum=BLACKPILL_F401CC,usb=CDCgen
+            output: bin
+          - name: STM32F411CE-BLACK-PILL
+            sketch: STM32F4-BLACK-PILL
+            core: STMicroelectronics:stm32@2.10.1
+            fqbn: STMicroelectronics:stm32:GenF4:pnum=BLACKPILL_F411CE,usb=CDCgen
+            output: bin
+
+          # ---------- Arduino Mbed ----------
+          - name: GIGA-R1
+            sketch: GIGA-R1
+            core: arduino:mbed_giga@4.3.1
+            fqbn: arduino:mbed_giga:giga
+            output: bin
+          - name: RPI-PICO-RP2040
+            sketch: RPI-PICO-RP2040
+            core: arduino:mbed_rp2040@4.3.1
+            fqbn: arduino:mbed_rp2040:pico
+            output: uf2
+
+          # ---------- Arduino UNO R4 (same UNO-R4 sketch for Minima and WiFi) ----------
+          - name: UNO-R4-MINIMA
+            sketch: UNO-R4
+            core: arduino:renesas_uno@1.5.1
+            fqbn: arduino:renesas_uno:minima
+            output: bin
+          - name: UNO-R4-WIFI
+            sketch: UNO-R4
+            core: arduino:renesas_uno@1.5.1
+            fqbn: arduino:renesas_uno:unor4wifi
+            output: bin
+
+          # ---------- AVR (board selected via BOARD_* macro) ----------
+          - name: UNO-R3
+            sketch: AVR-NANO-UNO-MEGA
+            core: arduino:avr@1.8.6
+            fqbn: arduino:avr:uno
+            defines: -DBOARD_UNO_R3
+            output: hex
+          - name: NANO-CLASSIC
+            sketch: AVR-NANO-UNO-MEGA
+            core: arduino:avr@1.8.6
+            fqbn: arduino:avr:nano:cpu=atmega328
+            defines: -DBOARD_NANO_CLASSIC
+            output: hex
+          - name: MEGA-2560-R3
+            sketch: AVR-NANO-UNO-MEGA
+            core: arduino:avr@1.8.6
+            fqbn: arduino:avr:mega:cpu=atmega2560
+            defines: -DBOARD_MEGA_2560_R3
+            output: hex
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache Arduino cores
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino15-${{ matrix.core }}
+
+      - name: Install core and libraries
+        run: |
+          arduino-cli config init --overwrite --additional-urls "$ADDITIONAL_URLS"
+          arduino-cli core update-index
+          arduino-cli core install "${{ matrix.core }}"
+          eval arduino-cli lib install $LIBRARIES
+
+      - name: Compile
+        run: |
+          args=()
+          if [[ -n "${{ matrix.defines }}" ]]; then
+            args+=(--build-property "compiler.cpp.extra_flags=${{ matrix.defines }}")
+          fi
+          arduino-cli compile --fqbn "${{ matrix.fqbn }}" "${args[@]}" \
+            --warnings default --output-dir build "${{ matrix.sketch }}"
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          src="build/${{ matrix.sketch }}.ino.${{ matrix.output }}"
+          case "${{ matrix.output }}" in
+            # AVR: convert Intel HEX to raw binary
+            hex) objcopy -I ihex -O binary "$src" "dist/Chords-${{ matrix.name }}.bin" ;;
+            # ESP32 merged image (bootloader + partitions + app) is flashed at 0x0;
+            # keep "merged" in the name so flashers (e.g. NPG-Lite-Flasher-Web) pick 0x0
+            merged.bin) cp "$src" "dist/Chords-${{ matrix.name }}.merged.bin" ;;
+            *) cp "$src" "dist/Chords-${{ matrix.name }}.${{ matrix.output }}" ;;
+          esac
+          ls -l dist
+
+      # Only used to hand binaries to the release job; deleted once the release is published
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            # Re-run for an existing tag: replace the binaries and make it latest again
+            gh release upload "$VERSION" dist/* --clobber
+            gh release edit "$VERSION" --latest
+          else
+            # The most recently pushed tag always becomes "latest", whatever its version
+            gh release create "$VERSION" dist/* --verify-tag \
+              --title "$VERSION" --notes "Built from commit ${GITHUB_SHA::7}." --latest
+          fi
+
+      # Remove the temporary per-board zip artifacts from the workflow run
+      - uses: geekyeggo/delete-artifact@v5
+        with:
+          name: "*"
