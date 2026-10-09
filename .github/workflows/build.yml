@@ -1,8 +1,5 @@
 name: Build firmware
 
-# - Pull request: compile all boards (build check only).
-# - Push to main: compile all boards, then publish a GitHub Release tagged RELEASE_VERSION
-#   (below) if that release doesn't exist yet. Bump RELEASE_VERSION to make a new release.
 on:
   push:
     branches: [main]
@@ -24,15 +21,15 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.name }}`
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           # ---------- NPG Lite (ESP32-C6) ----------
-          - name: NPG-LITE-ESP32C6
-            sketch: NPG-LITE
+          - name: NPG-LITE-Serial-ESP32C6
+            sketch: NPG-LITE-Serial
             core: esp32:esp32@3.2.0
             fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
             output: merged.bin
