@@ -167,6 +167,11 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Run releases one at a time so a later run sees the release created by an earlier one
+    # and skips it (the first commit carrying a RELEASE_VERSION claims that version)
+    concurrency:
+      group: release
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: write
@@ -197,8 +202,15 @@ jobs:
       - name: Create tag and release
         if: steps.check.outputs.publish == 'true'
         run: |
-          gh release create "$RELEASE_VERSION" dist/* --target "$GITHUB_SHA" \
-            --title "$RELEASE_VERSION" --notes "Built from commit ${GITHUB_SHA::7}." --latest
+          if ! gh release create "$RELEASE_VERSION" dist/* --target "$GITHUB_SHA" \
+              --title "$RELEASE_VERSION" --notes "Built from commit ${GITHUB_SHA::7}." --latest; then
+            # Another run may have created it after our check; that's fine, anything else is an error
+            if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+              echo "::notice::Release $RELEASE_VERSION was created by another run, skipping."
+            else
+              exit 1
+            fi
+          fi
 
       # Remove the temporary per-board zip artifacts from the workflow run
       - uses: geekyeggo/delete-artifact@v5
